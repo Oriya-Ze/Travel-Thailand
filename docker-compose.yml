@@ -1,0 +1,162 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: shop
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d shop -h localhost"]
+      interval: "3s"
+      timeout: "3s"
+      retries: 40
+    networks: [appnet]
+
+  redis:
+    image: redis:alpine
+    networks: [appnet]
+
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    environment:
+      DISABLE_SECURITY_PLUGIN: "true"         # <<< מכבה את תוסף האבטחה ללוקאל
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      nofile: { soft: 65535, hard: 65535 }
+    ports: ["9200:9200"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
+      interval: "10s"
+      timeout: "5s"
+      retries: 30
+    networks: [appnet]
+
+  opensearch-dash:
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"  # <<< תואם לכיבוי בשרת
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    ports: ["5601:5601"]
+    networks: [appnet]
+
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio12345
+    command: ["server", "/data", "--console-address", ":9001"]
+    volumes:
+      - minio:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/ready || exit 1"]
+      interval: "10s"
+      timeout: "5s"
+      retries: 30
+    networks: [appnet]
+
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh","-lc"]
+    command: >
+      mc alias set local http://minio:9000 minio minio12345 &&
+      mc mb -p local/your-bucket-name || true &&
+      mc anonymous set download local/your-bucket-name || true
+    networks: [appnet]
+
+  keycloak-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak
+      POSTGRES_DB: keycloak
+    volumes:
+      - kcdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak -h localhost"]
+      interval: "3s"
+      timeout: "3s"
+      retries: 40
+    networks: [appnet]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HOSTNAME_STRICT: "false"
+    command: ["start", "--http-enabled=true", "--http-port=8080", "--import-realm"]
+    volumes:
+      - ./dev/idp:/opt/keycloak/data/import
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/realms/master/.well-known/openid-configuration || exit 1"]
+      interval: "10s"
+      timeout: "5s"
+      retries: 40
+    networks: [appnet]
+
+  keycloak-setup:
+    image: quay.io/keycloak/keycloak:24.0.5
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    entrypoint: ["/bin/sh","-lc"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    command: >
+      until curl -fsS http://keycloak:8080/realms/dev/.well-known/openid-configuration >/dev/null 2>&1; do sleep 2; done;
+      /opt/keycloak/bin/kcadm.sh config credentials --server http://keycloak:8080 --realm master --user $KEYCLOAK_ADMIN --password $KEYCLOAK_ADMIN_PASSWORD;
+      /opt/keycloak/bin/kcadm.sh create users -r dev -s username=demo -s enabled=true -s email=demo@example.com -s emailVerified=true || true;
+      /opt/keycloak/bin/kcadm.sh set-password -r dev --username demo --new-password Demo123! || true;
+    networks: [appnet]
+
+  api:
+    build: ./backend
+    env_file: ./backend/.env
+    depends_on:
+      db:         { condition: service_healthy }
+      opensearch: { condition: service_healthy }
+      redis:      { condition: service_started }
+      minio:      { condition: service_started }
+      keycloak:   { condition: service_started }
+    ports: ["8000:8000"]
+    command: ["sh","-lc","python -m app.bootstrap && exec gunicorn ${APP_MODULE:-app.main:app} -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --workers 2 --threads 4 --timeout 60"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: "10s"
+      timeout: "5s"
+      retries: 30
+      start_period: "20s"
+    networks: [appnet]
+
+volumes:
+  dbdata:
+  kcdata:
+  minio:
+
+networks:
+  appnet:
+    driver: bridge
+    name: appnet
+

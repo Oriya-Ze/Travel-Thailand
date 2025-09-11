@@ -1,0 +1,13 @@
+fastapi                   # Web API framework (ASGI)
+uvicorn[standard]         # Fast ASGI server (uvloop+httptools)
+gunicorn                  # Process manager / production server
+psycopg[binary]           # PostgreSQL driver (psycopg3, binary wheels)
+sqlalchemy                # ORM / SQL toolkit
+alembic                   # Database migrations (SQLAlchemy)
+python-jose[cryptography] # JWT/OAuth signing & verification
+httpx                     # Modern async/sync HTTP client
+opensearch-py             # OpenSearch Python client
+redis                     # Redis client
+boto3                     # AWS SDK for Python
+pydantic-settings         # Settings management with Pydantic v2
+

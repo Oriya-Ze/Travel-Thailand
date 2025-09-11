@@ -1,0 +1,24 @@
+{
+  "realm": "dev",
+  "enabled": true,
+  "registrationAllowed": true,
+  "sslRequired": "NONE",
+  "clients": [
+    {
+      "clientId": "shop-frontend",
+      "publicClient": true,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true
+    }
+    ],
+  "roles": {
+    "realm": [
+      { "name": "admin" },
+      { "name": "moderator" },
+      { "name": "user" }
+    ]
+  }
+}
+
